@@ -1,0 +1,166 @@
+version: '3.8'
+
+services:
+  # MinIO - S3-compatible object storage (free alternative to AWS S3)
+  minio:
+    image: minio/minio:latest
+    container_name: starlink-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"  # API port
+      - "9001:9001"  # Console port
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MinIO Client - for bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: starlink-minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/starlink-etl-raw-data --ignore-existing;
+      mc mb myminio/starlink-etl-processed --ignore-existing;
+      mc mb myminio/starlink-etl-checkpoints --ignore-existing;
+      mc anonymous set download myminio/starlink-etl-processed;
+      echo 'MinIO buckets initialized';
+      "
+    profiles:
+      - init
+
+  # PostgreSQL Database (free alternative to AWS RDS)
+  postgres:
+    image: postgres:15
+    container_name: starlink-postgres
+    environment:
+      POSTGRES_DB: starlink
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../infrastructure/rds_setup.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Spark ETL Job (runs on demand)
+  spark-etl:
+    build:
+      context: ../spark_etl
+      dockerfile: Dockerfile
+    container_name: starlink-spark-etl
+    environment:
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - S3_ENDPOINT=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_ENDPOINT_URL=http://minio:9000
+    volumes:
+      - ../spark_etl/jobs:/app/jobs
+      - ./data:/app/data
+    command: >
+      spark-submit
+      --master local[*]
+      --conf spark.sql.adaptive.enabled=true
+      --conf spark.hadoop.fs.s3a.endpoint=minio:9000
+      --conf spark.hadoop.fs.s3a.path.style.access=true
+      --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
+      --conf spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
+      --conf spark.hadoop.fs.s3a.access.key=minioadmin
+      --conf spark.hadoop.fs.s3a.secret.key=minioadmin
+      --py-files /app/jobs
+      /app/jobs/main.py
+      --s3-raw-bucket starlink-etl-raw-data
+      --s3-processed-bucket starlink-etl-processed
+      --s3-checkpoint-bucket starlink-etl-checkpoints
+      --file-format csv
+      --rds-host postgres
+      --rds-port 5432
+      --rds-database starlink
+      --rds-user postgres
+      --rds-password postgres
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    profiles:
+      - etl
+
+  # Dashboard Web Application
+  dashboard:
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
+    container_name: starlink-dashboard
+    ports:
+      - "5000:5000"
+    environment:
+      - RDS_HOST=postgres
+      - RDS_PORT=5432
+      - RDS_DATABASE=starlink
+      - RDS_USER=postgres
+      - RDS_PASSWORD=postgres
+      - S3_PROCESSED_BUCKET=starlink-etl-processed
+      - S3_ENDPOINT_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ../dashboard:/app
+    command: python app.py
+
+  # Data Generator (runs on demand)
+  data-generator:
+    build:
+      context: ../data_generator
+      dockerfile: Dockerfile
+    container_name: starlink-data-generator
+    environment:
+      - S3_ENDPOINT_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - S3_BUCKET=starlink-etl-raw-data
+    volumes:
+      - ../data_generator:/app
+      - ./data:/app/data
+    depends_on:
+      minio:
+        condition: service_healthy
+    command: >
+      python generator.py
+      --output-dir /app/data
+      --format csv
+      --num-satellites 100
+      --hours 24
+      --frequency 5
+      --upload-to-minio
+      --minio-bucket starlink-etl-raw-data
+    profiles:
+      - generator
+
+volumes:
+  postgres_data:
+  minio_data:
+

@@ -1,0 +1,47 @@
+{
+  "family": "starlink-etl-job",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["EC2", "FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/starlink-etl-task-role",
+  "containerDefinitions": [
+    {
+      "name": "spark-etl",
+      "image": "YOUR_ECR_REPO/starlink-spark-etl:latest",
+      "essential": true,
+      "command": [
+        "spark-submit",
+        "--master", "local[*]",
+        "--conf", "spark.sql.adaptive.enabled=true",
+        "--conf", "spark.sql.adaptive.coalescePartitions.enabled=true",
+        "--py-files", "/app/jobs",
+        "/app/jobs/main.py",
+        "--s3-raw-bucket", "starlink-etl-raw-data",
+        "--s3-processed-bucket", "starlink-etl-processed",
+        "--s3-checkpoint-bucket", "starlink-etl-checkpoints",
+        "--file-format", "csv"
+      ],
+      "environment": [
+        {
+          "name": "AWS_DEFAULT_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "PYSPARK_PYTHON",
+          "value": "python3"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/starlink-etl",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "spark-etl"
+        }
+      }
+    }
+  ]
+}
+
