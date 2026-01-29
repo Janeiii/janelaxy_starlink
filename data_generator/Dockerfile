@@ -11,9 +11,6 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install AWS CLI for S3 uploads
-RUN pip install --no-cache-dir awscli boto3
-
 # Copy application code
 COPY . .
 

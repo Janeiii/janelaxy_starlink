@@ -5,7 +5,7 @@
 set -e
 
 echo "Setting up Starlink ETL Pipeline locally..."
-echo "This will use Docker Compose with MinIO (S3-compatible) and PostgreSQL"
+echo "This will use Docker Compose with PostgreSQL"
 
 # Check if Docker is installed
 if ! command -v docker &> /dev/null; then
@@ -23,26 +23,19 @@ cd infrastructure
 
 echo ""
 echo "=== Starting services ==="
-echo "Starting MinIO, PostgreSQL, and Dashboard..."
+echo "Starting PostgreSQL and Dashboard..."
 
 # Start core services
-docker-compose up -d minio postgres dashboard
+docker-compose up -d postgres dashboard
 
 # Wait for services to be healthy
 echo "Waiting for services to be ready..."
 sleep 10
 
-# Initialize MinIO buckets
-echo ""
-echo "=== Initializing MinIO buckets ==="
-docker-compose --profile init run --rm minio-init
-
 echo ""
 echo "=== Setup complete! ==="
 echo ""
 echo "Services running:"
-echo "  - MinIO Console: http://localhost:9001 (minioadmin/minioadmin)"
-echo "  - MinIO API: http://localhost:9000"
 echo "  - PostgreSQL: localhost:5432 (postgres/postgres)"
 echo "  - Dashboard: http://localhost:5000"
 echo ""
